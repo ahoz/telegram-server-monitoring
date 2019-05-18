@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-import sys, os
+import sys, os, hashlib, requests, re
 from subprocess import Popen
 from subprocess import PIPE
 from subprocess import STDOUT
 
-checkdisk = {}
-checkdisk['sda1'] = {'diskpath' : '/dev/sda1', 'threshhold' : '20%', 'unit' : 'GB'}
+CHATID=''
+APIKEY=''
+
+checkdisks = {}
+checkdisks['sda1'] = {'diskpath' : '/dev/sda1', 'threshhold' : '20%', 'unit' : 'GB'}
 
 def syscmd(cmd, encoding=''):
+    """ 
+        Execute Shell Command
+
+    Args:
+        cmd:        str, cmd command
+        encoding:   str, encoding
+
+    Returns:
+        Output on Success or Returncode in Failure
     """
-    Runs a command on the system, waits for the command to finish, and then
-    returns the text output of the command. If the command produces no text
-    output, the command's return code will be returned instead.
-    """
-    p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT,
-        close_fds=True)
+    p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, close_fds=True)
     p.wait()
     output = p.stdout.read()
     if len(output) > 1:
@@ -23,53 +30,118 @@ def syscmd(cmd, encoding=''):
     return p.returncode
 
 def userlogin():
-	return syscmd("echo Login auf $(hostname) am $(date +%Y-%m-%d) um $(date +%H:%M) - USER: $USER")
+    """ 
+        Returns User Login Message
+    """
+    return syscmd("echo Login auf $(hostname) am $(date +%Y-%m-%d) um $(date +%H:%M) - USER: $USER")
 
 def checkdisk(diskpath, threshhold, unit):
-	return syscmd("/usr/lib/nagios/plugins/check_disk -w "+threshhold+" -p "+diskpath+" -u "+unit+" | cut -f1 -d \";\"")
+    """ 
+        Checks Diskusage with Nagios Plugin
+
+    Args:
+        diskpath:   str, /dev/sdXY (e.g. /dev/sda1)
+        threshhold: str, threshhold (10%, 10GB, 20%,...)
+        unit:       str, unit (GB, MB,...)
+
+    Returns:
+        Returns Output on Critical Status, Empty String Otherwise
+    """
+    output = syscmd("/usr/lib/nagios/plugins/check_disk -w "+threshhold+" -p "+diskpath+" -u "+unit+" | cut -f1 -d \";\"")
+    matchObj = re.match( r'DISK OK(.*?) .*', output, re.M|re.I)
+    if matchObj:
+    	return ""
+    return output
 
 def checkapt():
-	return syscmd("/usr/lib/nagios/plugins/check_apt | cut -f1 -d\".\"")
+	""" 
+        Checks apt packages
+
+    Returns:
+    	Checks if Something has Changed Since Last Time and Returns Output, Empty String Otherwise
+    """
+    apt = syscmd("/usr/lib/nagios/plugins/check_apt | cut -f1 -d\".\"")
+    if md5(apt) in md5(readfile("./cache/aptcheck")): return ""
+    writefile("./cache/aptcheck", apt)
+    return apt
 
 def writefile(file, content):
-	f = open(file, "w")
-	f.write(content)
-	f.close()
+	""" 
+        Write a file
+
+    Args:
+        file:  	str, filepath
+        content:str, file content
+    """
+    f = open(file, "w")
+    f.write(content)
+    f.close()
 
 def readfile(file):
-	f = open(file, "r")
-	f.read()
-	f.close()
+	""" 
+    	Reads a File    
 
-if int(sys.argv[1]) == 1:
-	ss = syscmd("ls")
-	print(ss)
+    Args:
+		file:	str, filepath
 
-# declare -a container=("element1" "element2" "element3")
+    Returns:
+        Returns File Content, Empty String Otherwise
+    """
+    f = open(file, "r")
+    file = f.read()
+    f.close()
+    return file
 
-# if [ $1 -eq 1 ]
-# then
-#         # user login
-#         /opt/send_tg_info.sh 2 Login auf $(hostname) am $(date +%Y-%m-%d) um $(date +%H:%M) - USER: $USER
-# elif [ $1 -eq 2 ]
-# then
-#         # chech disk free
-#         DISK_CURRENT=$(/usr/lib/nagios/plugins/check_disk -w 20% -p /dev/sda1 -u GB | cut -f1 -d";")
-#         STATUS=$(echo $DISK_CURRENT | sed -e 's/DISK OK/1/g' | head -c1)
-#         if [ ! "$STATUS" == "1" ]
-#         then
-#                 /opt/send_tg_info.sh 3 $DISK_CURRENT
-#         fi
-#         #echo $DISK_CURRENT
-# elif [ $1 -eq 3 ]
-# then
-#         # updates
-#         APT_CURRENT=$(cat /opt/monitoring_tmp/apt_status)
-#         APT_RESULT=$(/usr/lib/nagios/plugins/check_apt | cut -f1 -d".")
-#         if [[ $APT_RESULT = *"timed out"* ]]; then
-#                 exit 0
-#         fi
-#         echo $APT_RESULT > /opt/monitoring_tmp/apt_status
-#         if [ !  "$APT_CURRENT" == "$APT_RESULT" ]; then
-#                 /opt/send_tg_info.sh 1 $APT_RESULT
-#         fi
+def sendMessage(apikey, chatid, message):
+	 """ 
+        Sends Message to Telegram
+
+    Args:
+        apikey:	str, Telegram API Key
+        chatid: str, Telegram ChatID
+        message:str, Message
+    """
+    data = { 'chat_id': chatid, 'text': message }
+    response = requests.post('https://api.telegram.org/bot'+apikey+'/sendMessage', data=data)
+
+
+def md5(string):
+	 """ 
+        Converts a string to md5
+
+    Args:
+        string:	str, any string
+
+    Returns:
+        Returns Output on Critical Status, Empty String Otherwise
+    """
+    return hashlib.md5(string.encode('utf-8')).hexdigest()
+
+def main(APIKEY, CHATID, argv):
+	""" 
+        Main Method
+
+    Args:
+        APIKEY:	str, Telegram API Key
+        CHATID: str, Telegram ChatID
+        argv:	str, argv
+    """
+    try:
+        arg = argv[1]
+    except:
+        print("error")
+        sys.exit(1)
+
+    if int(arg) == 1:
+        sendMessage(APIKEY, CHATID, userlogin())
+    elif int(arg) == 2:
+        for disk in checkdisks:
+            sendMessage(APIKEY, CHATID, checkdisk(checkdisks[disk]['diskpath'], checkdisks[disk]['threshhold'], checkdisks[disk]['unit']))
+    elif int(arg) == 3:
+        apt = checkapt()
+        if len(apt)>0:
+            return sendMessage(APIKEY, CHATID, apt) 
+        
+
+if __name__== "__main__":
+    main(APIKEY, CHATID, sys.argv)
